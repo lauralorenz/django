@@ -63,6 +63,20 @@ class RequestDataTooBig(SuspiciousOperation):
     pass
 
 
+class RequestAborted(Exception):
+    """
+    The request was closed before it was completed.
+    """
+    pass
+
+
+class RequestTimeout(Exception):
+    """
+    The request took too long to provide the rest of its body.
+    """
+    pass
+
+
 class PermissionDenied(Exception):
     """The user did not have permission to do that"""
     pass
