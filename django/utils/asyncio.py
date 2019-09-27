@@ -42,10 +42,18 @@ class AsyncHelper:
         self.parent = parent
 
     def __getattr__(self, item):
-        original = getattr(self.parent, item)
-        if asyncio.iscoroutinefunction(original):
-            return original
-        return sync_to_async(original)
+        if item == 'parent':
+            # TODO: design talk necessary here
+            # adding in a way to bypass to the sync parent
+            # in the async API
+            # because I don't always want to make these attributes async
+            # if they are CPU only and the underlying library is not async/await supportable
+            return self.parent
+        else:
+            original = getattr(self.parent, item)
+            if asyncio.iscoroutinefunction(original):
+                return original
+            return sync_to_async(original)
 
 
 class SyncHelper:

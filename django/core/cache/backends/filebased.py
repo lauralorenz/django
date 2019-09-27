@@ -7,6 +7,7 @@ import random
 import tempfile
 import time
 import zlib
+import aiofile
 
 from django.core.cache.backends.base import DEFAULT_TIMEOUT, BaseCache
 from django.core.files import locks
@@ -16,7 +17,58 @@ from django.utils.asyncio import async_unsafe, AsyncHelper
 
 class FileBasedAsyncHelper(AsyncHelper):
     async def get(self, key, default=None, version=None):
-        pass  # here we implement the natively async version
+        fname = self.parent._key_to_file(key, version)
+        try:
+            async with aiofile.AIOFile(fname, 'rb') as f:
+                if not await self._is_expired(f):
+                    content = await f.read()
+                    return pickle.loads(zlib.decompress(content))
+        except FileNotFoundError:
+            pass
+        return default
+
+    async def _delete(self, fname):
+        if not fname.startswith(self._dir) or not os.path.exists(fname):
+            return
+        try:
+            await os.remove(fname)
+        except FileNotFoundError:
+            # The file may have been removed by another process.
+            pass
+
+    async def _write_content(self, file, timeout, value):
+        # pickle does not need to be async
+        expiry = self.parent.get_backend_timeout(timeout)
+        await file.write(pickle.dumps(expiry, self.parent.pickle_protocol))
+        await file.write(zlib.compress(pickle.dumps(value, self.parent.pickle_protocol)))
+
+    async def set(self, key, value, timeout=DEFAULT_TIMEOUT, version=None):
+        self._createdir()  # Cache dir can be deleted at any time.
+        fname = self._key_to_file(key, version)
+        self._cull()  # make some room if necessary
+        # TODO: tempfile API not exposed by aiofile yet
+        # see https://github.com/Tinche/aiofiles/issues/20
+        fd, tmp_path = tempfile.mkstemp(dir=self.parent._dir)
+        renamed = False
+        try:
+            async with aiofile.AIOFile(fd, 'wb') as f:
+                await self._write_content(f, timeout, value)
+            await file_move_safe(tmp_path, fname, allow_overwrite=True) # TODO: broke. os.stat does not take coroutines
+            renamed = True
+        finally:
+            if not renamed:
+                os.remove(tmp_path)
+
+    async def touch(self, key, timeout=DEFAULT_TIMEOUT, version=None):
+        raise NotImplementedError
+
+    async def _delete(self, fname):
+        raise NotImplementedError
+
+    async def has_key(self, key, version=None):
+        raise NotImplementedError
+
+    # TODO: may need to pull up more
 
 
 class FileBasedCache(BaseCache):
@@ -90,6 +142,7 @@ class FileBasedCache(BaseCache):
     def delete(self, key, version=None):
         self._delete(self._key_to_file(key, version))
 
+    @async_unsafe
     def _delete(self, fname):
         if not fname.startswith(self._dir) or not os.path.exists(fname):
             return
